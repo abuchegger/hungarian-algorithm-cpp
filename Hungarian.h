@@ -24,48 +24,71 @@ template<class T>
 class Matrix
 {
 public:
+  typedef std::vector<T> Container;
+
   Matrix()
     : data_(), num_rows_(0), num_cols_(0)
   {}
 
-  Matrix(std::size_t num_rows, std::size_t num_cols, const T& initial_value)
+  Matrix(const std::size_t num_rows, const std::size_t num_cols, const T& initial_value)
     : data_(num_rows * num_cols, initial_value), num_rows_(num_rows), num_cols_(num_cols)
   {}
 
-  Matrix(std::size_t num_rows, std::size_t num_cols, const std::vector<T>& initial_value)
+  Matrix(const std::size_t num_rows, const std::size_t num_cols, const std::vector<T>& initial_value)
     : data_(initial_value), num_rows_(num_rows), num_cols_(num_cols)
   {
     assert(data_.size() == (num_rows_ * num_cols_));
   }
 
-  inline T& at(std::size_t row, std::size_t col)
+  void assign(const std::size_t num_rows, const std::size_t num_cols, const T& value)
   {
-    return data_.at(row * num_cols_ + col);
+    data_.assign(num_rows * num_cols, value);
+    num_rows_ = num_rows;
+    num_cols_ = num_cols;
   }
 
-  inline T& operator()(std::size_t row, std::size_t col)
+  void assign(const T& value)
   {
-    return data_[row * num_cols_ + col];
+    data_.assign(data_.size(), value);
   }
 
-  inline const T& at(std::size_t row, std::size_t col) const
-  {
-    return data_.at(row * num_cols_ + col);
-  }
-
-  inline const T& operator()(std::size_t row, std::size_t col) const
+  inline T& operator()(const std::size_t row, const std::size_t col)
   {
     return data_[row * num_cols_ + col];
   }
 
-  inline std::size_t getNumRows() const
+  inline const T& operator()(const std::size_t row, const std::size_t col) const
+  {
+    return data_[row * num_cols_ + col];
+  }
+
+  inline std::size_t numRows() const
   {
     return num_rows_;
   }
 
-  inline std::size_t getNumCols() const
+  inline std::size_t numCols() const
   {
     return num_cols_;
+  }
+
+  std::size_t findInRow(const std::size_t row, const T& value) const
+  {
+    const Container::const_iterator row_begin = data_.begin() + row * num_cols_;
+    return static_cast<std::size_t>(std::distance(row_begin, std::find(row_begin, row_begin + num_cols_, value)));
+  }
+
+  std::size_t findInCol(const std::size_t col, const T& value) const
+  {
+    std::size_t row = 0;
+    for (; row < num_rows_; ++row)
+    {
+      if ((*this)(row, col) == value)
+      {
+        break;
+      }
+    }
+    return row;
   }
 
 protected:
@@ -109,12 +132,11 @@ struct MaximizeCosts : public CostNormalizationStrategy<Cost>
   }
 };
 
-template<typename Cost, typename Size = std::size_t>
+template<typename Cost>
 class Solver
 {
 public:
   typedef Cost Cost;
-  typedef Size Size;
 
   explicit Solver(const Cost invalid_cost, const Cost epsilon_cost = std::numeric_limits<Cost>::epsilon())
     : invalid_cost_(invalid_cost), epsilon_cost_(epsilon_cost)
@@ -126,25 +148,43 @@ public:
   {
   }
 
-  template<typename NormalizationStrategy = MinimizeCosts, typename CostFunction>
-  void solve(const CostFunction& cost_function, const Size num_rows, const Size num_cols)
+  /**
+   * Solves an assignment problem.
+   *
+   * @tparam NormalizationStrategy strategy for bringing the costs returned by the cost function into the setup required
+   *                               for the algorithm. Should be either MinimizeCosts or MaximizeCosts.
+   * @tparam CostFunction type of the cost_function parameter.
+   * @tparam AssignmentMap type of the assignment parameter.
+   * @param cost_function anything that takes a row and a column index and returns a cost.
+   *                      Used like Cost c = cost_function(row, col). In particular, the Matrix utility class, and the
+   *                      matrix classes of several libraries like Eigen or OpenCV provide this interface.
+   * @param num_rows number of rows (e.g., workers) in the assignment problem.
+   * @param num_cols number of columns (e.g. jobs) in the assignment problem.
+   * @param assignment anything that can be indexed and then assigned an index. Used like assignment[row] = col. In
+   *                   particular, std::vector and std::map provide this interface. Must accept a row index in the range
+   *                   0 ... num_rows - 1. Only valid assignments are set; other entries are left unchanged (and should
+   *                   thus probably be initialized to something invalid, like SIZE_MAX).
+   * @return the cost of the optimal assignment.
+   */
+  template<typename NormalizationStrategy = MinimizeCosts, typename CostFunction, typename Size, typename AssignmentMap>
+  Cost solve(const CostFunction& cost_function, const Size num_rows, const Size num_cols, AssignmentMap& assignment)
   {
     assert(num_rows > Size(0));
     assert(num_cols > Size(0));
 
-    copyAndNormalizeCosts<NormalizationStrategy, CostFunction>(cost_function, num_rows, num_cols);
+    copyAndNormalizeCosts<NormalizationStrategy, CostFunction, Size>(cost_function, num_rows, num_cols);
 
-    covered_rows_.assign(cost_matrix_.getNumRows(), false);
-    covered_cols_.assign(cost_matrix_.getNumCols(), false);
-    star_matrix_ = Matrix<bool>(cost_matrix_.getNumRows(), cost_matrix_.getNumCols(), false);
-    prime_matrix_ = Matrix<bool>(cost_matrix_.getNumRows(), cost_matrix_.getNumCols(), false);
+    covered_rows_.assign(cost_matrix_.numRows(), false);
+    covered_cols_.assign(cost_matrix_.numCols(), false);
+    star_matrix_.assign(cost_matrix_.numRows(), cost_matrix_.numCols(), false);
+    prime_matrix_.assign(cost_matrix_.numRows(), cost_matrix_.numCols(), false);
 
     // Steps 1 and 2a:
-    for (std::size_t row = 0; row < cost_matrix_.getNumRows(); ++row)
+    for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
     {
-      for (std::size_t col = 0; col < cost_matrix_.getNumCols(); ++col)
+      for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
       {
-        if (cost_matrix_(row, col) <= epsilon_cost_ && !covered_cols_[col])
+        if (!covered_cols_[col] && cost_matrix_(row, col) <= epsilon_cost_)
         {
           star_matrix_(row, col) = true;
           covered_cols_[col] = true;
@@ -153,27 +193,33 @@ public:
       }
     }
 
-    if (!step2b())
+    if (!areAllColumnsCovered())
     {
       /* algorithm not finished */
       /* move to step 3 */
-      step3();
+      while (true)
+      {
+        while (!step3())
+        {
+        }
+        step5();
+        if (step3())
+        {
+          break;
+        }
+      }
     }
 
-    /* algorithm finished */
-    buildassignmentvector(assignment, star_matrix);
-
-    // Compute cost and remove invalid assignments:
-    computeassignmentcost(assignment, total_cost, costs_, num_rows_);
+    return fillAssignment<CostFunction, Size, AssignmentMap>(cost_function, num_rows, num_cols, assignment);
   }
 
 protected:
-  template<typename NormalizationStrategy, typename CostFunction>
+  template<typename NormalizationStrategy, typename CostFunction, typename Size>
   void copyAndNormalizeCosts(const CostFunction& cost_function, const Size num_rows, const Size num_cols)
   {
     // Make cost matrix square, filling extraneous elements with invalid cost:
     const std::size_t max_size(static_cast<std::size_t>(std::max(num_rows, num_cols)));
-    cost_matrix_ = Matrix<Cost>(max_size, max_size, invalid_cost_);
+    cost_matrix_.assign(max_size, max_size, invalid_cost_);
 
     // Copy costs, making sure optimal element in each row is zero, and every other one is larger; note that this does
     // not touch the extraneous elements:
@@ -197,25 +243,163 @@ protected:
     }
   }
 
-  bool step2b()
+  template<typename CostFunction, typename Size, typename AssignmentMap>
+  Cost fillAssignment(const CostFunction& cost_function, const Size num_rows, const Size num_cols,
+                      AssignmentMap& assignment)
   {
-    // Count covered columns:
-    const std::vector<bool>::difference_type num_covered_cols
-      = std::count(covered_cols_.begin(), covered_cols_.end(), true);
-
-    return num_covered_cols == covered_cols_.size();
+    // Fill assignment vector and compute total cost of assignment:
+    Cost total_cost(0);
+    std::size_t s_row = 0;
+    for (Size row(0); row < num_rows; ++row, ++s_row)
+    {
+      std::size_t s_col = 0;
+      for (Size col(0); col < num_cols; ++col, ++s_col)
+      {
+        if (star_matrix_(s_row, s_col))
+        {
+          assignment[row] = col;
+          total_cost += cost_function(row, col);
+          break;
+        }
+      }
+    }
+    return total_cost;
   }
 
-  void buildassignmentvector(int* assignment, bool* starMatrix);
-  void computeassignmentcost(int* assignment, double* cost, double* distMatrix, int nOfRows);
-  void step2a(int* assignment, double* distMatrix, bool* starMatrix, bool* newStarMatrix, bool* primeMatrix,
-              bool* coveredColumns, bool* coveredRows, int nOfRows, int nOfColumns, int minDim);
-  void step3(int* assignment, double* distMatrix, bool* starMatrix, bool* primeMatrix,
-             bool* coveredColumns, bool* coveredRows, int nOfRows, int nOfColumns, int minDim);
-  void step4(int* assignment, double* distMatrix, bool* starMatrix, bool* newStarMatrix, bool* primeMatrix,
-             bool* coveredColumns, bool* coveredRows, int nOfRows, int nOfColumns, int minDim, int row, int col);
-  void step5(int* assignment, double* distMatrix, bool* starMatrix, bool* newStarMatrix, bool* primeMatrix,
-             bool* coveredColumns, bool* coveredRows, int nOfRows, int nOfColumns, int minDim);
+  void coverStarredColumns()
+  {
+    // Cover every column containing a starred zero:
+    for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+    {
+      if (star_matrix_.findInCol(col, true) < cost_matrix_.numRows())
+      {
+        covered_cols_[col] = true;
+      }
+    }
+  }
+
+  bool areAllColumnsCovered()
+  {
+    return std::count(covered_cols_.begin(), covered_cols_.end(), true) == covered_cols_.size();
+  }
+
+  bool step3()
+  {
+    bool zeros_found = true;
+    while (zeros_found)
+    {
+      // Find zeros in uncovered cells ("prime" zeros):
+      zeros_found = false;
+      for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+      {
+        if (!covered_cols_[col])
+        {
+          for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
+          {
+            if (!covered_rows_[row] && cost_matrix_(row, col) <= epsilon_cost_)
+            {
+              // Found a prime zero:
+              prime_matrix_(row, col) = true;
+
+              // Find starred zero in current row:
+              const std::size_t star_col = star_matrix_.findInRow(row, true);
+              if (star_col < cost_matrix_.numCols())
+              {
+                // Found a starred zero in current row => cover row, uncover column, and proceed with next column:
+                covered_rows_[row] = true;
+                covered_cols_[star_col] = false;
+                zeros_found = true;
+                break;
+              }
+
+              // No starred zero found => move to step 4:
+              step4(row, col);
+              coverStarredColumns();
+              return areAllColumnsCovered(); // Continue searching if not all columns are starred
+            }
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  void step4(const std::size_t row, const std::size_t col)
+  {
+    // Generate temporary copy of star matrix:
+    Matrix<bool> new_star_matrix(star_matrix_);
+
+    // Star current zero:
+    new_star_matrix(row, col) = true;
+
+    // Find starred zero in current column:
+    std::size_t star_row = star_matrix_.findInCol(col, true);
+    while (star_row < cost_matrix_.numRows())
+    {
+      // Unstar the starred zero:
+      new_star_matrix(star_row, col) = false;  // FIXME: is col really right in subsequent iterations?
+
+      // Find primed zero in current row:
+      const std::size_t prime_col = prime_matrix_.findInRow(star_row, true);
+
+      // Star the primed zero:
+      // FIXME: can't prime_col be >= numCols here??
+      new_star_matrix(star_row, prime_col) = true;
+
+      // Find starred zero in current column:
+      star_row = star_matrix_.findInCol(prime_col, true);
+    }
+
+    // Use temporary copy as new star matrix:
+    star_matrix_ = new_star_matrix;
+
+    // Delete all primes, uncover all rows:
+    prime_matrix_.assign(false);
+    covered_rows_.assign(covered_rows_.size(), false);
+  }
+
+  void step5()
+  {
+    // Find smallest uncovered element:
+    Cost h = invalid_cost_;
+    for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
+    {
+      if (!covered_rows_[row])
+      {
+        for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+        {
+          if (!covered_cols_[col])
+          {
+            h = std::min(h, cost_matrix_(row, col));
+          }
+        }
+      }
+    }
+
+    // Add h to each covered row:
+    for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
+    {
+      if (covered_rows_[row])
+      {
+        for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+        {
+          cost_matrix_(row, col) += h;
+        }
+      }
+    }
+
+    // Subtract h from each uncovered column:
+    for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+    {
+      if (!covered_cols_[col])
+      {
+        for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
+        {
+          cost_matrix_(row, col) -= h;
+        }
+      }
+    }
+  }
 
   const Cost invalid_cost_;
   const Cost epsilon_cost_;
