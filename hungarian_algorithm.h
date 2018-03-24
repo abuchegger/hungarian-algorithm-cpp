@@ -16,6 +16,8 @@
 #include <cassert>
 #include <limits>
 #include <vector>
+#include <deque>
+#include <queue>
 
 namespace hungarian_algorithm
 {
@@ -24,40 +26,44 @@ template<class T>
 class Matrix
 {
 public:
-  typedef std::vector<T> Container;
+  // Declare a few types like the STL containers:
+  typedef std::vector<T> container_type;
+  typedef typename container_type::value_type value_type;
+  typedef typename container_type::reference reference;
+  typedef typename container_type::const_reference const_reference;
 
   Matrix()
     : data_(), num_rows_(0), num_cols_(0)
   {}
 
-  Matrix(const std::size_t num_rows, const std::size_t num_cols, const T& initial_value)
+  Matrix(const std::size_t num_rows, const std::size_t num_cols, const value_type& initial_value)
     : data_(num_rows * num_cols, initial_value), num_rows_(num_rows), num_cols_(num_cols)
   {}
 
-  Matrix(const std::size_t num_rows, const std::size_t num_cols, const std::vector<T>& initial_value)
+  Matrix(const std::size_t num_rows, const std::size_t num_cols, const container_type& initial_value)
     : data_(initial_value), num_rows_(num_rows), num_cols_(num_cols)
   {
     assert(data_.size() == (num_rows_ * num_cols_));
   }
 
-  void assign(const std::size_t num_rows, const std::size_t num_cols, const T& value)
+  void assign(const std::size_t num_rows, const std::size_t num_cols, const value_type& value)
   {
     data_.assign(num_rows * num_cols, value);
     num_rows_ = num_rows;
     num_cols_ = num_cols;
   }
 
-  void assign(const T& value)
+  void assign(const value_type& value)
   {
     data_.assign(data_.size(), value);
   }
 
-  inline T& operator()(const std::size_t row, const std::size_t col)
+  inline reference operator()(const std::size_t row, const std::size_t col)
   {
     return data_[row * num_cols_ + col];
   }
 
-  inline const T& operator()(const std::size_t row, const std::size_t col) const
+  inline const_reference operator()(const std::size_t row, const std::size_t col) const
   {
     return data_[row * num_cols_ + col];
   }
@@ -72,13 +78,13 @@ public:
     return num_cols_;
   }
 
-  std::size_t findInRow(const std::size_t row, const T& value) const
+  std::size_t findInRow(const std::size_t row, const value_type& value) const
   {
-    const Container::const_iterator row_begin = data_.begin() + row * num_cols_;
+    const typename container_type::const_iterator row_begin = data_.begin() + row * num_cols_;
     return static_cast<std::size_t>(std::distance(row_begin, std::find(row_begin, row_begin + num_cols_, value)));
   }
 
-  std::size_t findInCol(const std::size_t col, const T& value) const
+  std::size_t findInCol(const std::size_t col, const value_type& value) const
   {
     std::size_t row = 0;
     for (; row < num_rows_; ++row)
@@ -92,7 +98,7 @@ public:
   }
 
 protected:
-  std::vector<T> data_;
+  container_type data_;
   std::size_t num_rows_;
   std::size_t num_cols_;
 };
@@ -132,11 +138,44 @@ struct MaximizeCosts : public CostNormalizationStrategy<Cost>
   }
 };
 
-template<typename Cost>
+template <typename Size, typename AssignmentMap>
+struct AssignmentMapAdapter
+{
+  AssignmentMapAdapter(AssignmentMap& assignment_map, const Size /*num_rows*/, const Size /*num_cols*/)
+    : assignment_map_(assignment_map)
+  {
+  }
+
+  void insert(const Size row, const Size col) const
+  {
+    assignment_map_[row] = col;
+  }
+
+  AssignmentMap& assignment_map_;
+};
+
+template <typename Size>
+struct AssignmentMapAdapter<Size, std::vector<Size> >
+{
+  AssignmentMapAdapter(std::vector<Size>& assignment_map, const Size num_rows, const Size /*num_cols*/)
+    : assignment_map_(assignment_map)
+  {
+    assignment_map_.assign(static_cast<std::size_t>(num_rows), std::numeric_limits<Size>::max());
+  }
+
+  void insert(const Size row, const Size col) const
+  {
+    assignment_map_[row] = col;
+  }
+
+  std::vector<Size>& assignment_map_;
+};
+
+template<typename Cost, typename CostNormalizationStrategy = MinimizeCosts<Cost> >
 class Solver
 {
 public:
-  typedef Cost Cost;
+  typedef Cost CostType;
 
   explicit Solver(const Cost invalid_cost, const Cost epsilon_cost = std::numeric_limits<Cost>::epsilon())
     : invalid_cost_(invalid_cost), epsilon_cost_(epsilon_cost)
@@ -160,19 +199,19 @@ public:
    *                      matrix classes of several libraries like Eigen or OpenCV provide this interface.
    * @param num_rows number of rows (e.g., workers) in the assignment problem.
    * @param num_cols number of columns (e.g. jobs) in the assignment problem.
-   * @param assignment anything that can be indexed and then assigned an index. Used like assignment[row] = col. In
-   *                   particular, std::vector and std::map provide this interface. Must accept a row index in the range
-   *                   0 ... num_rows - 1. Only valid assignments are set; other entries are left unchanged (and should
-   *                   thus probably be initialized to something invalid, like SIZE_MAX).
+   * @param assignment_map anything that can be indexed and then assigned an index. Used like assignment[row] = col. In
+   *                       particular, std::vector and std::map provide this interface. Must accept a row index in the
+   *                       range 0 ... num_rows - 1. Only valid assignments are set; other entries are left unchanged
+   *                       (and should thus probably be initialized to something invalid, like SIZE_MAX).
    * @return the cost of the optimal assignment.
    */
-  template<typename NormalizationStrategy = MinimizeCosts, typename CostFunction, typename Size, typename AssignmentMap>
-  Cost solve(const CostFunction& cost_function, const Size num_rows, const Size num_cols, AssignmentMap& assignment)
+  template<typename CostFunction, typename Size, typename AssignmentMap>
+  Cost solve(const CostFunction& cost_function, const Size num_rows, const Size num_cols, AssignmentMap& assignment_map)
   {
     assert(num_rows > Size(0));
     assert(num_cols > Size(0));
 
-    copyAndNormalizeCosts<NormalizationStrategy, CostFunction, Size>(cost_function, num_rows, num_cols);
+    copyAndNormalizeCosts<CostFunction, Size>(cost_function, num_rows, num_cols);
 
     covered_rows_.assign(cost_matrix_.numRows(), false);
     covered_cols_.assign(cost_matrix_.numCols(), false);
@@ -210,11 +249,18 @@ public:
       }
     }
 
-    return fillAssignment<CostFunction, Size, AssignmentMap>(cost_function, num_rows, num_cols, assignment);
+    return fillAssignmentMap<CostFunction, Size, AssignmentMap>(
+      cost_function, num_rows, num_cols, AssignmentMapAdapter<Size, AssignmentMap>(assignment_map, num_rows, num_cols));
+  }
+
+  template <typename AssignmentMap>
+  Cost solve(const Matrix<Cost>& cost_matrix, AssignmentMap& assignment_map)
+  {
+    return solve(cost_matrix, cost_matrix.numRows(), cost_matrix.numCols(), assignment_map);
   }
 
 protected:
-  template<typename NormalizationStrategy, typename CostFunction, typename Size>
+  template<typename CostFunction, typename Size>
   void copyAndNormalizeCosts(const CostFunction& cost_function, const Size num_rows, const Size num_cols)
   {
     // Make cost matrix square, filling extraneous elements with invalid cost:
@@ -233,19 +279,19 @@ protected:
       {
         const Cost cost(cost_function(row, col));
         cost_matrix_(s_row, s_col) = cost;
-        best_cost = NormalizationStrategy::getBetterCost(best_cost, cost);
+        best_cost = CostNormalizationStrategy::getBetterCost(best_cost, cost);
       }
 
       for (col = Size(0), s_col = 0; col < num_cols; ++col, ++s_col)
       {
-        cost_matrix_(s_row, s_col) = NormalizationStrategy::normalizeCost(cost_matrix_(s_row, s_col), best_cost);
+        cost_matrix_(s_row, s_col) = CostNormalizationStrategy::normalizeCost(cost_matrix_(s_row, s_col), best_cost);
       }
     }
   }
 
   template<typename CostFunction, typename Size, typename AssignmentMap>
-  Cost fillAssignment(const CostFunction& cost_function, const Size num_rows, const Size num_cols,
-                      AssignmentMap& assignment)
+  Cost fillAssignmentMap(const CostFunction& cost_function, const Size num_rows, const Size num_cols,
+                         const AssignmentMapAdapter<Size, AssignmentMap>& assignment_map)
   {
     // Fill assignment vector and compute total cost of assignment:
     Cost total_cost(0);
@@ -257,7 +303,7 @@ protected:
       {
         if (star_matrix_(s_row, s_col))
         {
-          assignment[row] = col;
+          assignment_map.insert(row, col);
           total_cost += cost_function(row, col);
           break;
         }
@@ -280,7 +326,8 @@ protected:
 
   bool areAllColumnsCovered()
   {
-    return std::count(covered_cols_.begin(), covered_cols_.end(), true) == covered_cols_.size();
+    return static_cast<std::size_t>(std::count(covered_cols_.begin(), covered_cols_.end(), true))
+      == covered_cols_.size();
   }
 
   bool step3()
