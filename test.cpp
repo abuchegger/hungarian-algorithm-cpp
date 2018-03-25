@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include "hungarian_algorithm.h"
 
@@ -41,55 +42,94 @@ void test_solver_1x1()
   std::cout << std::endl << "total cost: " << total_cost << std::endl;
 }
 
+template<typename Cost>
+void printCostMatrix(std::ostream& out, const hungarian_algorithm::Matrix<Cost> cost_matrix)
+{
+  out << "cost_matrix:" << std::endl;
+  for (std::size_t row = 0; row < cost_matrix.numRows(); ++row)
+  {
+    out << "  ";
+    for (std::size_t col = 0; col < cost_matrix.numCols(); ++col)
+    {
+      out << (col != 0 ? ", " : "") << std::setw(3) << cost_matrix(row, col);
+    }
+    out << std::endl;
+  }
+}
+
+template<typename Size, typename Cost>
+void printAssignment(std::ostream& out, const std::vector<Size>& assignment,
+                     const hungarian_algorithm::Matrix<Cost> cost_matrix)
+{
+  out << "assignment:" << std::endl;
+  Size row(0);
+  for (std::size_t i = 0; i < assignment.size(); ++i, ++row)
+  {
+    out << "  " << i << " -> ";
+    const Size a = assignment[i];
+    if (0 <= a && a < cost_matrix.numCols())
+    {
+      out << a << " (cost: " << cost_matrix(row, assignment[i]) << ")" << std::endl;
+    }
+    else
+    {
+      out << "invalid" << std::endl;
+    }
+  }
+}
+
 /**
  * Computes minimal cost by iterating over all possible assignments (combinations).
  */
 template<typename Cost>
 Cost computeMinimalCostBruteForce(const hungarian_algorithm::Matrix<Cost> cost_matrix)
 {
-  std::vector<std::size_t> assignment(cost_matrix.numRows(), 0);
+  std::vector<std::size_t> assignment(cost_matrix.numRows() - 1, 0);
+  std::vector<Cost> accumulated_costs(cost_matrix.numRows() - 1, 0);
+  std::vector<bool> covered_cols(cost_matrix.numCols(), false);
   Cost min_cost = std::numeric_limits<Cost>::max();
   std::size_t row = 0;
+  std::size_t col = 0;
   while (true)
   {
-    bool valid = true;
-    for (std::size_t r = 0; r < row; ++r)
+    if (col < cost_matrix.numCols())
     {
-      if (assignment[r] == assignment[row])
+      // Loop body:
+      if (covered_cols.at(col))
       {
-        valid = false;
-        break;
-      }
-    }
-    if (!valid)
-    {
-      ++assignment[row];
-    }
-    else if (assignment[row] < cost_matrix.numCols())
-    {
-      if (row < (cost_matrix.numRows() - 1))
-      {
-        ++row;
-        assignment[row] = 0;
+        // Current column is an invalid assignment => try next column:
+        ++col;
       }
       else
       {
-        Cost cost = 0;
-        for (std::size_t r = 0; r < cost_matrix.numRows(); ++r)
+        const Cost cost = (row > 0 ? accumulated_costs[row - 1] : Cost(0)) + cost_matrix(row, col);
+        if (row < (cost_matrix.numRows() - 1))
         {
-          cost += cost_matrix(r, assignment[r]);
+          // Save context and start loop for next row:
+          assignment[row] = col;
+          covered_cols[col] = true;
+          accumulated_costs[row] = cost;
+          ++row;
+          col = 0;
         }
-        min_cost = std::min(min_cost, cost);
-        ++assignment[row];
+        else
+        {
+          min_cost = std::min(min_cost, cost);
+          ++col;
+        }
       }
     }
     else if (row > 0)
     {
+      // Tried all combinations in this row => return to previous row and restore context:
       --row;
-      ++assignment[row];
+      col = assignment[row];
+      covered_cols[col] = false;
+      ++col;
     }
     else
     {
+      // Tried all combinations in all rows => exit:
       return min_cost;
     }
   }
@@ -107,11 +147,7 @@ void test_solver()
   std::vector<std::size_t> assignment;
   const double total_cost = munkres.solve(cost_matrix, assignment);
   assert(total_cost == computeMinimalCostBruteForce(cost_matrix));
-
-  for (std::size_t i = 0; i < assignment.size(); ++i)
-  {
-    std::cout << i << " -> " << assignment[i] << " (cost = " << cost_matrix(i, assignment[i]) << ")" << std::endl;
-  }
+  printAssignment(std::cout, assignment, cost_matrix);
 
   std::cout << std::endl << "total cost: " << total_cost << std::endl;
 }
@@ -120,7 +156,7 @@ void test_solver_random_square(const std::size_t num_rows, const std::size_t num
 {
   hungarian_algorithm::Matrix<int> cost_matrix(num_rows, num_rows, 0);
   std::vector<std::size_t> assignment;
-  const int max_cost = RAND_MAX / static_cast<int>(num_rows);  // To prevent overflows when summing
+  const int max_cost = std::min(1000, RAND_MAX / static_cast<int>(num_rows));  // To prevent overflows when summing
   for (std::size_t i = 0; i < num_runs; ++i)
   {
     for (std::size_t row = 0; row < cost_matrix.numRows(); ++row)
@@ -138,16 +174,8 @@ void test_solver_random_square(const std::size_t num_rows, const std::size_t num
     {
       std::cerr << "total_cost != total_cost_brute_force:" << std::endl;
       std::cerr << total_cost << " != " << total_cost_brute_force << ":" << std::endl;
-      std::cerr << "cost_matrix:" << std::endl;
-      for (std::size_t row = 0; row < cost_matrix.numRows(); ++row)
-      {
-        std::cerr << "  ";
-        for (std::size_t col = 0; col < cost_matrix.numCols(); ++col)
-        {
-          std::cerr << (col != 0 ? ", " : "") << cost_matrix(row, col);
-        }
-        std::cerr << std::endl;
-      }
+      printCostMatrix(std::cerr, cost_matrix);
+      printAssignment(std::cerr, assignment, cost_matrix);
     }
     assert(total_cost == total_cost_brute_force);
   }
