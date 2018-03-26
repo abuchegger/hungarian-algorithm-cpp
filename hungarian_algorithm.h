@@ -15,9 +15,9 @@
 #include <algorithm>
 #include <cassert>
 #include <limits>
+#include <ostream>
+#include <sstream>
 #include <vector>
-#include <deque>
-#include <queue>
 
 namespace hungarian_algorithm
 {
@@ -97,6 +97,50 @@ public:
     return row;
   }
 
+  void print(std::ostream& out, const std::string& indent = std::string(), const std::string& colsep = ", ",
+             const std::string& rowsep = ";\n") const
+  {
+    // Save formatting info for later:
+    const std::streamsize width = out.width(0);
+    const std::streamsize precision = out.precision();
+    std::size_t i = 0;
+    for (std::size_t row = 0; row < num_rows_; ++row)
+    {
+      out << indent;
+      for (std::size_t col = 0; col < num_cols_; ++col)
+      {
+        if (col != 0)
+        {
+          out << colsep;
+        }
+        out.width(width);
+        out.precision(precision);
+        out << data_[i++];
+      }
+      out << rowsep;
+    }
+  }
+
+  template<typename Size>
+  void printAssignment(std::ostream& out, const std::vector<Size>& assignment,
+                       const std::string& indent = std::string()) const
+  {
+    Size row(0);
+    for (std::size_t i = 0; i < assignment.size(); ++i, ++row)
+    {
+      out << indent << i << " -> ";
+      const Size col = assignment[i];
+      if (0 <= col && col < Size(num_cols_))
+      {
+        out << col << " (cost: " << (*this)(row, col) << ")" << std::endl;
+      }
+      else
+      {
+        out << "invalid" << std::endl;
+      }
+    }
+  }
+
 protected:
   container_type data_;
   std::size_t num_rows_;
@@ -138,7 +182,7 @@ struct MaximizeCosts : public CostNormalizationStrategy<Cost>
   }
 };
 
-template <typename Size, typename AssignmentMap>
+template<typename Size, typename AssignmentMap>
 struct AssignmentMapAdapter
 {
   AssignmentMapAdapter(AssignmentMap& assignment_map, const Size /*num_rows*/, const Size /*num_cols*/)
@@ -154,7 +198,7 @@ struct AssignmentMapAdapter
   AssignmentMap& assignment_map_;
 };
 
-template <typename Size>
+template<typename Size>
 struct AssignmentMapAdapter<Size, std::vector<Size> >
 {
   AssignmentMapAdapter(std::vector<Size>& assignment_map, const Size num_rows, const Size /*num_cols*/)
@@ -171,19 +215,21 @@ struct AssignmentMapAdapter<Size, std::vector<Size> >
   std::vector<Size>& assignment_map_;
 };
 
-template<typename Cost, typename CostNormalizationStrategy = MinimizeCosts<Cost> >
-class Solver
+class HungarianMethod;  // Tag class
+
+template<typename Cost, typename CostNormalizationStrategy = MinimizeCosts<Cost>,
+  typename SolvingMethod = HungarianMethod>
+class Solver;
+
+template<typename Cost, typename CostNormalizationStrategy, typename SolvingMethod>
+class SolverBase
 {
 public:
   typedef Cost CostType;
+  typedef Solver<Cost, CostNormalizationStrategy, SolvingMethod> SolverImplementation;
 
-  explicit Solver(const Cost invalid_cost, const Cost epsilon_cost = std::numeric_limits<Cost>::epsilon())
-    : invalid_cost_(invalid_cost), epsilon_cost_(epsilon_cost)
-  {
-  }
-
-  explicit Solver(const Cost epsilon_cost = std::numeric_limits<Cost>::epsilon())
-    : invalid_cost_(std::numeric_limits<Cost>::max()), epsilon_cost_(epsilon_cost)
+  explicit SolverBase(const Cost invalid_cost)
+    : invalid_cost_(invalid_cost)
   {
   }
 
@@ -208,52 +254,15 @@ public:
   template<typename CostFunction, typename Size, typename AssignmentMap>
   Cost solve(const CostFunction& cost_function, const Size num_rows, const Size num_cols, AssignmentMap& assignment_map)
   {
-    assert(num_rows > Size(0));
-    assert(num_cols > Size(0));
-
     copyAndNormalizeCosts<CostFunction, Size>(cost_function, num_rows, num_cols);
 
-    covered_rows_.assign(cost_matrix_.numRows(), false);
-    covered_cols_.assign(cost_matrix_.numCols(), false);
-    star_matrix_.assign(cost_matrix_.numRows(), cost_matrix_.numCols(), false);
-    prime_matrix_.assign(cost_matrix_.numRows(), cost_matrix_.numCols(), false);
-
-    // Steps 1 and 2a:
-    for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
-    {
-      for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
-      {
-        if (!covered_cols_[col] && cost_matrix_(row, col) <= epsilon_cost_)
-        {
-          star_matrix_(row, col) = true;
-          covered_cols_[col] = true;
-          break;
-        }
-      }
-    }
-
-    if (!areAllColumnsCovered())
-    {
-      /* algorithm not finished */
-      /* move to step 3 */
-      while (true)
-      {
-        while (!step3())
-        {
-        }
-        step5();
-        if (step3())
-        {
-          break;
-        }
-      }
-    }
+    static_cast<SolverImplementation*>(this)->doSolve();
 
     return fillAssignmentMap<CostFunction, Size, AssignmentMap>(
       cost_function, num_rows, num_cols, AssignmentMapAdapter<Size, AssignmentMap>(assignment_map, num_rows, num_cols));
   }
 
-  template <typename AssignmentMap>
+  template<typename AssignmentMap>
   Cost solve(const Matrix<Cost>& cost_matrix, AssignmentMap& assignment_map)
   {
     return solve(cost_matrix, cost_matrix.numRows(), cost_matrix.numCols(), assignment_map);
@@ -263,6 +272,9 @@ protected:
   template<typename CostFunction, typename Size>
   void copyAndNormalizeCosts(const CostFunction& cost_function, const Size num_rows, const Size num_cols)
   {
+    assert(num_rows > Size(0));
+    assert(num_cols > Size(0));
+
     // Make cost matrix square, filling extraneous elements with invalid cost:
     const std::size_t max_size(static_cast<std::size_t>(std::max(num_rows, num_cols)));
     cost_matrix_.assign(max_size, max_size, invalid_cost_);
@@ -298,18 +310,84 @@ protected:
     std::size_t s_row = 0;
     for (Size row(0); row < num_rows; ++row, ++s_row)
     {
-      std::size_t s_col = 0;
-      for (Size col(0); col < num_cols; ++col, ++s_col)
+      const std::size_t s_col(static_cast<SolverImplementation*>(this)->getAssignment(s_row));
+      const Size col(s_col);
+      if (s_col < std::size_t(num_cols) && Size(0) <= col && col < num_cols) // Watch out for overflows and the like
       {
-        if (star_matrix_(s_row, s_col))
+        assignment_map.insert(row, col);
+        total_cost += cost_function(row, col);
+      }
+    }
+    return total_cost;
+  }
+
+  const Cost invalid_cost_;
+  Matrix<Cost> cost_matrix_;
+};
+
+template<typename Cost, typename CostNormalizationStrategy>
+class Solver<Cost, CostNormalizationStrategy, HungarianMethod>
+  : public SolverBase<Cost, CostNormalizationStrategy, HungarianMethod>
+{
+public:
+  explicit Solver(const Cost invalid_cost, const Cost epsilon_cost = std::numeric_limits<Cost>::epsilon())
+    : SolverBase<Cost, CostNormalizationStrategy, HungarianMethod>(invalid_cost), epsilon_cost_(epsilon_cost)
+  {
+  }
+
+  explicit Solver(const Cost epsilon_cost = std::numeric_limits<Cost>::epsilon())
+    : SolverBase<Cost, CostNormalizationStrategy, HungarianMethod>(std::numeric_limits<Cost>::max()),
+      epsilon_cost_(epsilon_cost)
+  {
+  }
+
+protected:
+  friend class SolverBase<Cost, CostNormalizationStrategy, HungarianMethod>;
+  using SolverBase<Cost, CostNormalizationStrategy, HungarianMethod>::cost_matrix_;
+  using SolverBase<Cost, CostNormalizationStrategy, HungarianMethod>::invalid_cost_;
+
+  void doSolve()
+  {
+    covered_rows_.assign(cost_matrix_.numRows(), false);
+    covered_cols_.assign(cost_matrix_.numCols(), false);
+    star_matrix_.assign(cost_matrix_.numRows(), cost_matrix_.numCols(), false);
+    prime_matrix_.assign(cost_matrix_.numRows(), cost_matrix_.numCols(), false);
+
+    // Steps 1 and 2a:
+    for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
+    {
+      for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+      {
+        if (!covered_cols_[col] && cost_matrix_(row, col) <= epsilon_cost_)
         {
-          assignment_map.insert(row, col);
-          total_cost += cost_function(row, col);
+          star_matrix_(row, col) = true;
+          covered_cols_[col] = true;
           break;
         }
       }
     }
-    return total_cost;
+
+    if (!areAllColumnsCovered())
+    {
+      /* algorithm not finished */
+      /* move to step 3 */
+      while (true)
+      {
+        while (!step3())
+        {
+        }
+        step5();
+        if (step3())
+        {
+          break;
+        }
+      }
+    }
+  }
+
+  std::size_t getAssignment(const std::size_t row) const
+  {
+    return star_matrix_.findInRow(row, true);
   }
 
   void coverStarredColumns()
@@ -448,13 +526,75 @@ protected:
     }
   }
 
-  const Cost invalid_cost_;
   const Cost epsilon_cost_;
-  Matrix<Cost> cost_matrix_;
   std::vector<bool> covered_rows_;
   std::vector<bool> covered_cols_;
   Matrix<bool> star_matrix_;
   Matrix<bool> prime_matrix_;
+};
+
+class BruteForceMethod;  // Tag class
+
+/**
+ * Computes minimal cost by iterating over all possible assignments (combinations).
+ */
+template<typename Cost, typename CostNormalizationStrategy>
+class Solver<Cost, CostNormalizationStrategy, BruteForceMethod>
+  : public SolverBase<Cost, CostNormalizationStrategy, BruteForceMethod>
+{
+public:
+  explicit Solver(const Cost invalid_cost = std::numeric_limits<Cost>::max())
+    : SolverBase<Cost, CostNormalizationStrategy, BruteForceMethod>(invalid_cost)
+  {
+  }
+
+protected:
+  friend class SolverBase<Cost, CostNormalizationStrategy, BruteForceMethod>;
+  using SolverBase<Cost, CostNormalizationStrategy, BruteForceMethod>::cost_matrix_;
+  using SolverBase<Cost, CostNormalizationStrategy, BruteForceMethod>::invalid_cost_;
+
+  void doSolve()
+  {
+    current_assignment_.assign(cost_matrix_.numRows(), std::numeric_limits<std::size_t>::max());
+    optimal_assignment_.assign(cost_matrix_.numRows(), std::numeric_limits<std::size_t>::max());
+    covered_cols_.assign(cost_matrix_.numCols(), false);
+    min_cost_ = std::numeric_limits<Cost>::max();
+    doSolve(0, Cost(0));
+  }
+
+  void doSolve(const std::size_t row, const Cost accumulated_cost)
+  {
+    for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+    {
+      if (!covered_cols_.at(col))
+      {
+        const Cost cost = accumulated_cost + cost_matrix_(row, col);
+        if (row < (cost_matrix_.numRows() - 1))
+        {
+          current_assignment_[row] = col;
+          covered_cols_[col] = true;
+          doSolve(row + 1, cost);
+          covered_cols_[col] = false;
+        }
+        else if (cost < min_cost_)
+        {
+          min_cost_ = cost;
+          current_assignment_[row] = col;
+          optimal_assignment_ = current_assignment_;
+        }
+      }
+    }
+  }
+
+  std::size_t getAssignment(const std::size_t row) const
+  {
+    return optimal_assignment_[row];
+  }
+
+  std::vector<std::size_t> current_assignment_;
+  std::vector<std::size_t> optimal_assignment_;
+  std::vector<bool> covered_cols_;
+  Cost min_cost_;
 };
 }
 
