@@ -147,15 +147,20 @@ protected:
   std::size_t num_cols_;
 };
 
-template<typename Cost>
-struct CostNormalizationStrategy
+// Tag classes for CostNormalizationStrategy:
+class MinimizeCosts;
+class MaximizeCosts;
+
+template<typename Cost, typename CostNormalizationStrategy>
+struct CostNormalizer
 {
+  // Must be implemented by specializations:
   static Cost getBetterCost(const Cost& a, const Cost& b);
   static Cost normalizeCost(const Cost& cost, const Cost& best_cost);
 };
 
 template<typename Cost>
-struct MinimizeCosts : public CostNormalizationStrategy<Cost>
+struct CostNormalizer<Cost, MinimizeCosts>
 {
   static Cost getBetterCost(const Cost& a, const Cost& b)
   {
@@ -169,7 +174,7 @@ struct MinimizeCosts : public CostNormalizationStrategy<Cost>
 };
 
 template<typename Cost>
-struct MaximizeCosts : public CostNormalizationStrategy<Cost>
+struct CostNormalizer<Cost, MaximizeCosts>
 {
   static Cost getBetterCost(const Cost& a, const Cost& b)
   {
@@ -215,11 +220,31 @@ struct AssignmentMapAdapter<Size, std::vector<Size> >
   std::vector<Size>& assignment_map_;
 };
 
-class HungarianMethod;  // Tag class
+// Tag classes for SolvingMethod:
+/**
+ * Computes optimal assignment by iteratively looking for minimal costs for the remaining assignments. Also known as
+ * Munkres or Kuhn-Munkres algorithm.
+ */
+class HungarianMethod;
 
-template<typename Cost, typename CostNormalizationStrategy = MinimizeCosts<Cost>,
-  typename SolvingMethod = HungarianMethod>
-class Solver;
+/**
+ * Finds optimal assignment by iterating over all possible combinations.
+ */
+class BruteForceMethod;
+
+template<typename Cost, typename CostNormalizationStrategy, typename SolvingMethod>
+class SolverBase;
+
+template<typename Cost, typename CostNormalizationStrategy = MinimizeCosts, typename SolvingMethod = HungarianMethod>
+class Solver
+{
+protected:
+  friend class SolverBase<Cost, CostNormalizationStrategy, SolvingMethod>;
+
+  // Must be implemented by specializations:
+  void doSolve();
+  std::size_t getAssignment(const std::size_t row) const;
+};
 
 template<typename Cost, typename CostNormalizationStrategy, typename SolvingMethod>
 class SolverBase
@@ -272,6 +297,8 @@ protected:
   template<typename CostFunction, typename Size>
   void copyAndNormalizeCosts(const CostFunction& cost_function, const Size num_rows, const Size num_cols)
   {
+    typedef CostNormalizer<Cost, CostNormalizationStrategy> CostNormalizerImplementation;
+
     assert(num_rows > Size(0));
     assert(num_cols > Size(0));
 
@@ -291,12 +318,12 @@ protected:
       {
         const Cost cost(cost_function(row, col));
         cost_matrix_(s_row, s_col) = cost;
-        best_cost = CostNormalizationStrategy::getBetterCost(best_cost, cost);
+        best_cost = CostNormalizerImplementation::getBetterCost(best_cost, cost);
       }
 
       for (col = Size(0), s_col = 0; col < num_cols; ++col, ++s_col)
       {
-        cost_matrix_(s_row, s_col) = CostNormalizationStrategy::normalizeCost(cost_matrix_(s_row, s_col), best_cost);
+        cost_matrix_(s_row, s_col) = CostNormalizerImplementation::normalizeCost(cost_matrix_(s_row, s_col), best_cost);
       }
     }
   }
@@ -533,11 +560,6 @@ protected:
   Matrix<bool> prime_matrix_;
 };
 
-class BruteForceMethod;  // Tag class
-
-/**
- * Computes minimal cost by iterating over all possible assignments (combinations).
- */
 template<typename Cost, typename CostNormalizationStrategy>
 class Solver<Cost, CostNormalizationStrategy, BruteForceMethod>
   : public SolverBase<Cost, CostNormalizationStrategy, BruteForceMethod>
@@ -559,26 +581,39 @@ protected:
     optimal_assignment_.assign(cost_matrix_.numRows(), std::numeric_limits<std::size_t>::max());
     covered_cols_.assign(cost_matrix_.numCols(), false);
     min_cost_ = std::numeric_limits<Cost>::max();
-    doSolve(0, Cost(0));
+    min_invalid_assignments_ = std::numeric_limits<std::size_t>::max();
+    doSolve(0, Cost(0), 0);
   }
 
-  void doSolve(const std::size_t row, const Cost accumulated_cost)
+  void doSolve(const std::size_t row, const Cost accumulated_cost, const std::size_t accumulated_invalid_assignments)
   {
     for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
     {
       if (!covered_cols_.at(col))
       {
-        const Cost cost = accumulated_cost + cost_matrix_(row, col);
+        const Cost cost = cost_matrix_(row, col);
+        Cost new_accumulated_cost = accumulated_cost;
+        std::size_t new_accumulated_invalid_assignments = accumulated_invalid_assignments;
+        if (cost == invalid_cost_)
+        {
+          ++new_accumulated_invalid_assignments;
+        }
+        else
+        {
+          new_accumulated_cost += cost;
+        }
         if (row < (cost_matrix_.numRows() - 1))
         {
           current_assignment_[row] = col;
           covered_cols_[col] = true;
-          doSolve(row + 1, cost);
+          doSolve(row + 1, new_accumulated_cost, new_accumulated_invalid_assignments);
           covered_cols_[col] = false;
         }
-        else if (cost < min_cost_)
+        else if (new_accumulated_invalid_assignments < min_invalid_assignments_
+          || (new_accumulated_invalid_assignments == min_invalid_assignments_ && new_accumulated_cost < min_cost_))
         {
-          min_cost_ = cost;
+          min_cost_ = new_accumulated_cost;
+          min_invalid_assignments_ = new_accumulated_invalid_assignments;
           current_assignment_[row] = col;
           optimal_assignment_ = current_assignment_;
         }
@@ -595,6 +630,9 @@ protected:
   std::vector<std::size_t> optimal_assignment_;
   std::vector<bool> covered_cols_;
   Cost min_cost_;
+  // We count rows containing invalid assignments separately to mitigate some overflow / loss of significance problems
+  // found during testing, affecting both integral and floating-point types:
+  std::size_t min_invalid_assignments_;
 };
 }
 
