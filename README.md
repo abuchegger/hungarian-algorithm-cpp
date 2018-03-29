@@ -1,23 +1,29 @@
 # Hungarian Algorithm C++ Library
 
-Hungarian algorithm, also known as Munkres algorithm or Kuhn-Munkres algorithm,
-is a method for solving the assignment problem, for example assigning workers
-to jobs, which goal is to compute the optimal assignment that minimizes the
-total cost, and the like.
+**DON'T USE, CURRENTLY BROKEN**
 
-This is a C++ wrapper with slight modification of a hungarian algorithm
+The Hungarian algorithm, also known as Munkres algorithm or Kuhn-Munkres
+algorithm, is a method for solving the assignment problem, for example
+assigning workers to jobs. It finds the assignment that minimizes the total
+cost.
+
+This is a C++ version (with slight modifications) of a hungarian algorithm
 implementation by Markus Buehren. The original code is a few mex-functions for
 use in MATLAB, found here: 
 http://www.mathworks.com/matlabcentral/fileexchange/6543-functions-for-the-rectangular-assignment-problem
 
 ## Build
 
-    cd ..
     mkdir build
     cd build
-    cmake ../hungarian-algorithm-cpp
+    cmake ..
     make
 
-## Installation
+## Test
+
+    cd build
+    ctest -V
+
+## Install
 
 TODO

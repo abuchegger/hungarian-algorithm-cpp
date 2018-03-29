@@ -1,16 +1,15 @@
 ///////////////////////////////////////////////////////////////////////////////
-// Hungarian.h: Header file for Class HungarianAlgorithm.
+// A C++ implementation of the Hungarian algorithm for solving the assignment
+// problem.
 //
-// This is a C++ wrapper with slight modification of a hungarian algorithm implementation by Markus Buehren.
-// The original implementation is a few mex-functions for use in MATLAB, found here:
-// http://www.mathworks.com/matlabcentral/fileexchange/6543-functions-for-the-rectangular-assignment-problem
+// Both this code and the original MATLAB code by Markus Buehren are published
+// under the BSD license (see LICENSE.txt).
 //
-// Both this code and the orignal code are published under the BSD license.
-// by Cong Ma, 2016
+// Copyright (c) 2016, Cong Ma (mcximing)
+// Copyright (c) 2018, Alexander Buchegger (abuchegger)
 //
-
-#ifndef HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_H
-#define HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_H
+#ifndef HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_ALGORITHM_H
+#define HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_ALGORITHM_H
 
 #include <algorithm>
 #include <cassert>
@@ -26,7 +25,7 @@ template<class T>
 class Matrix
 {
 public:
-  // Declare a few types like the STL containers:
+  // Declare a few types like the STL containers do:
   typedef std::vector<T> container_type;
   typedef typename container_type::value_type value_type;
   typedef typename container_type::reference reference;
@@ -43,7 +42,13 @@ public:
   Matrix(const std::size_t num_rows, const std::size_t num_cols, const container_type& initial_value)
     : data_(initial_value), num_rows_(num_rows), num_cols_(num_cols)
   {
-    assert(data_.size() == (num_rows_ * num_cols_));
+    if (data_.size() != (num_rows_ * num_cols_))
+    {
+      data_.clear();
+      num_rows_ = 0;
+      num_cols_ = 0;
+      throw std::invalid_argument("Size of data does not match num_rows * num_cols");
+    }
   }
 
   void assign(const std::size_t num_rows, const std::size_t num_cols, const value_type& value)
@@ -485,21 +490,23 @@ protected:
     new_star_matrix(row, col) = true;
 
     // Find starred zero in current column:
-    std::size_t star_row = star_matrix_.findInCol(col, true);
+    std::size_t star_col = col;
+    std::size_t star_row = star_matrix_.findInCol(star_col, true);
     while (star_row < cost_matrix_.numRows())
     {
       // Unstar the starred zero:
-      new_star_matrix(star_row, col) = false;  // FIXME: is col really right in subsequent iterations?
+      new_star_matrix(star_row, star_col) = false;
 
       // Find primed zero in current row:
-      const std::size_t prime_col = prime_matrix_.findInRow(star_row, true);
+      star_col = prime_matrix_.findInRow(star_row, true);
 
       // Star the primed zero:
-      // FIXME: can't prime_col be >= numCols here??
-      new_star_matrix(star_row, prime_col) = true;
+      // FIXME: can't star_col be >= numCols here??
+      assert(star_col < cost_matrix_.numCols());
+      new_star_matrix(star_row, star_col) = true;
 
       // Find starred zero in current column:
-      star_row = star_matrix_.findInCol(prime_col, true);
+      star_row = star_matrix_.findInCol(star_col, true);
     }
 
     // Use temporary copy as new star matrix:
@@ -636,4 +643,4 @@ protected:
 };
 }
 
-#endif // HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_H
+#endif // HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_ALGORITHM_H
