@@ -61,7 +61,7 @@ BOOST_GLOBAL_FIXTURE(MyNumPunctFixture);
 
 template<typename Cost>
 void print_cost_matrix(std::ostream& out, const hungarian_algorithm::Matrix<Cost>& cost_matrix,
-                     const std::string& indent = std::string())
+                       const std::string& indent = std::string())
 {
   out << indent << "cost_matrix: [" << std::endl << std::setw(3);
   cost_matrix.print(out, indent + "  [", ", ", "],\n");
@@ -70,10 +70,37 @@ void print_cost_matrix(std::ostream& out, const hungarian_algorithm::Matrix<Cost
 
 template<typename Size, typename Cost>
 void print_assignment(std::ostream& out, const std::vector<Size>& assignment,
-                     const hungarian_algorithm::Matrix<Cost>& cost_matrix, const std::string& indent = std::string())
+                      const hungarian_algorithm::Matrix<Cost>& cost_matrix, const std::string& indent = std::string())
 {
   out << "assignment:" << std::endl;
   cost_matrix.printAssignment(out, assignment, indent);
+}
+
+template<typename SolvingMethod, typename Cost>
+void assert_solver_result(const hungarian_algorithm::Matrix<Cost>& cost_matrix,
+                          const std::size_t expected_num_invalid_assignments, const Cost expected_cost,
+                          const std::vector<std::size_t>& expected_assignment)
+{
+  hungarian_algorithm::Solver<Cost, hungarian_algorithm::MinimizeCosts, SolvingMethod> solver;
+  std::vector<std::size_t> assignment;
+  const typename hungarian_algorithm::Solver<Cost>::CombinedCost total_cost = solver.solve(cost_matrix, assignment);
+  BOOST_CHECK_EQUAL(total_cost.first, expected_num_invalid_assignments);
+  BOOST_CHECK_EQUAL(total_cost.second, expected_cost);
+  BOOST_CHECK_EQUAL_COLLECTIONS(assignment.begin(), assignment.end(),
+                                expected_assignment.begin(), expected_assignment.end());
+}
+
+template<typename Cost>
+void assert_solvers_result(const hungarian_algorithm::Matrix<Cost>& cost_matrix,
+                           const std::size_t expected_num_invalid_assignments, const Cost expected_cost,
+                           const std::vector<std::size_t>& expected_assignment)
+{
+  std::cout << "  Testing Hungarian solver" << std::endl;
+  assert_solver_result<hungarian_algorithm::HungarianMethod>(cost_matrix, expected_num_invalid_assignments,
+                                                             expected_cost, expected_assignment);
+  std::cout << "  Testing brute force solver" << std::endl;
+  assert_solver_result<hungarian_algorithm::BruteForceMethod>(cost_matrix, expected_num_invalid_assignments,
+                                                              expected_cost, expected_assignment);
 }
 
 template<typename Cost>
@@ -81,22 +108,25 @@ void assert_solvers_return_equal_cost(const hungarian_algorithm::Matrix<Cost>& c
 {
   hungarian_algorithm::Solver<Cost> munkres;
   hungarian_algorithm::Solver<Cost, hungarian_algorithm::MinimizeCosts, hungarian_algorithm::BruteForceMethod>
-      brute_force_solver;
+    brute_force_solver;
+  typedef typename hungarian_algorithm::Solver<Cost>::CombinedCost CombinedCost;
   std::vector<std::size_t> assignment, assignment_brute_force;
-  const int total_cost = munkres.solve(cost_matrix, assignment);
-  const int total_cost_brute_force = brute_force_solver.solve(cost_matrix, assignment_brute_force);
+  const CombinedCost total_cost = munkres.solve(cost_matrix, assignment);
+  const CombinedCost total_cost_brute_force = brute_force_solver.solve(cost_matrix, assignment_brute_force);
   if (total_cost != total_cost_brute_force)
   {
     std::cerr << "total_cost != total_cost_brute_force:" << std::endl;
-    std::cerr << "  total_cost: " << total_cost << std::endl;
-    std::cerr << "  total_cost_brute_force: " << total_cost_brute_force << std::endl;
+    std::cerr << "  total_cost: {ninv: " << total_cost.first << ", cost:" << total_cost.second << "}" << std::endl;
+    std::cerr << "  total_cost_brute_force: {ninv: " << total_cost_brute_force.first << ", cost:"
+              << total_cost_brute_force.second << "}" << std::endl;
     print_cost_matrix(std::cerr, cost_matrix, "  ");
     std::cerr << "  Hungarian ";
     print_assignment(std::cerr, assignment, cost_matrix, "    ");
     std::cerr << "  brute force ";
     print_assignment(std::cerr, assignment_brute_force, cost_matrix, "    ");
   }
-  BOOST_CHECK_EQUAL(total_cost, total_cost_brute_force);
+  BOOST_CHECK_EQUAL(total_cost.first, total_cost_brute_force.first);
+  BOOST_CHECK_EQUAL(total_cost.second, total_cost_brute_force.second);
 }
 
 void fill_matrix_with_random_ints(hungarian_algorithm::Matrix<int>& cost_matrix)
@@ -182,25 +212,53 @@ BOOST_AUTO_TEST_CASE(test_solver_construction)
 BOOST_AUTO_TEST_CASE(test_solver_1x1)
 {
   const hungarian_algorithm::Matrix<int> cost_matrix(1, 1, 1);
-  std::vector<std::size_t> assignment;
-  hungarian_algorithm::Solver<int> munkres;
-  const int total_cost = munkres.solve(cost_matrix, assignment);
-  BOOST_CHECK_EQUAL(total_cost, 1);
+  const std::vector<std::size_t> expected_assignment(1, 0);
+  assert_solvers_result(cost_matrix, 0, 1, expected_assignment);
 }
 
 BOOST_AUTO_TEST_CASE(test_solver_1x2)
 {
   const int costs[] = {1, 0};
   const hungarian_algorithm::Matrix<int> cost_matrix(1, 2, std::vector<int>(&costs[0], &costs[2]));
-  assert_solvers_return_equal_cost(cost_matrix);
+  const std::vector<std::size_t> expected_assignment(1, 1);
+  assert_solvers_result(cost_matrix, 0, 0, expected_assignment);
+}
+
+BOOST_AUTO_TEST_CASE(test_solver_2x1)
+{
+  const int costs[] = {1,
+                       0};
+  const std::size_t expected_assignment[] = {std::numeric_limits<std::size_t>::max(), 0};
+  const hungarian_algorithm::Matrix<int> cost_matrix(2, 1, std::vector<int>(&costs[0], &costs[2]));
+  assert_solvers_result(cost_matrix, 1, 0, std::vector<std::size_t>(&expected_assignment[0], &expected_assignment[2]));
+}
+
+BOOST_AUTO_TEST_CASE(test_solver_2x2)
+{
+  const int costs[] = {2, 4,
+                       0, 1};
+  const std::size_t expected_assignment[] = {0, 1};
+  const hungarian_algorithm::Matrix<int> cost_matrix(2, 2, std::vector<int>(&costs[0], &costs[4]));
+  assert_solvers_result(cost_matrix, 0, 3, std::vector<std::size_t>(&expected_assignment[0], &expected_assignment[2]));
 }
 
 BOOST_AUTO_TEST_CASE(test_solver_2x3)
 {
   const int costs[] = {1, 2, 0,
                        1, 3, 0};
+  const std::size_t expected_assignment[] = {0, 2};
   const hungarian_algorithm::Matrix<int> cost_matrix(2, 3, std::vector<int>(&costs[0], &costs[6]));
-  assert_solvers_return_equal_cost(cost_matrix);
+  assert_solvers_result(cost_matrix, 0, 1, std::vector<std::size_t>(&expected_assignment[0], &expected_assignment[2]));
+}
+
+BOOST_AUTO_TEST_CASE(test_solver_3x2)
+{
+  const int costs[] = {1, 2,
+                       0, 1,
+                       3, 0};
+  const std::size_t expected_assignment[] = {std::numeric_limits<std::size_t>::max(), 0, 1};
+  const hungarian_algorithm::Matrix<int> cost_matrix(3, 2, std::vector<int>(&costs[0], &costs[6]));
+  assert_solvers_result(cost_matrix, 1, 0, std::vector<std::size_t>(&expected_assignment[0], &expected_assignment[3]));
 }
 
 BOOST_AUTO_TEST_CASE(test_solver_4x5)
@@ -209,22 +267,22 @@ BOOST_AUTO_TEST_CASE(test_solver_4x5)
                           10, 18, 7, 17, 0,
                           13, 16, 9, 14, 0,
                           12, 19, 8, 18, 0};
+  const std::size_t expected_assignment[] = {0, 2, 3, 4};
   const hungarian_algorithm::Matrix<double> cost_matrix(4, 5, std::vector<double>(&costs[0], &costs[20]));
-  assert_solvers_return_equal_cost(cost_matrix);
+  assert_solvers_result(cost_matrix, 0, 31.0, std::vector<std::size_t>(&expected_assignment[0], &expected_assignment[4]));
 }
 
-BOOST_AUTO_TEST_CASE(test_solver_random_squares)
-{
-  test_solver_random_square(8, 10);
-}
+//BOOST_AUTO_TEST_CASE(test_solver_random_squares)
+//{
+//  test_solver_random_square(8, 10);
+//}
 
-BOOST_AUTO_TEST_CASE(test_solver_timings)
-{
-  std::cout << "Brute force method:" << std::endl;
-  test_solver_timing<hungarian_algorithm::BruteForceMethod>(10);
-  std::cout << "Hungarian method:" << std::endl;
-  test_solver_timing<hungarian_algorithm::HungarianMethod>(10);
-  test_solver_timing<hungarian_algorithm::HungarianMethod>(100);
-  test_solver_timing<hungarian_algorithm::HungarianMethod>(110);
-}
-
+//BOOST_AUTO_TEST_CASE(test_solver_timings)
+//{
+//  std::cout << "Brute force method:" << std::endl;
+//  test_solver_timing<hungarian_algorithm::BruteForceMethod>(10);
+//  std::cout << "Hungarian method:" << std::endl;
+//  test_solver_timing<hungarian_algorithm::HungarianMethod>(10);
+//  test_solver_timing<hungarian_algorithm::HungarianMethod>(100);
+//  test_solver_timing<hungarian_algorithm::HungarianMethod>(110);
+//}

@@ -26,4 +26,4 @@ target_link_libraries(${PROJECT_NAME}-test
   ${Boost_LIBRARIES}
 )
 
-add_test(NAME ${PROJECT_NAME}-test COMMAND ${PROJECT_NAME}-test)
+add_test(NAME ${PROJECT_NAME}-test COMMAND ${PROJECT_NAME}-test --log_level=test_suite)
