@@ -8,15 +8,8 @@
 // Copyright (c) 2016, Cong Ma (mcximing)
 // Copyright (c) 2018, Alexander Buchegger (abuchegger)
 //
-// TODO: split Hungarian and brute force algorithms in separate classes
-// TODO: ... again, common base creates too much unnecessary template fuzz.
-// TODO: change copyAndNormalizeCosts to convert costs to matrix of size_t. ...
-// TODO: ... This eliminates numeric issues with doubles, and allows us to ...
-// TODO: ... compile the actual solver implementation, as it's not templated ...
-// TODO: ... anymore. It should also allow us to replace
-// TODO: ... CostNormalizationStrategy with Comparator, for which we can use ...
-// TODO: ... std::less and std::greater, and get rid of special handling of ...
-// TODO: ... invalid_value_s.
+// TODO: make brute force algorithm a separate class again, a common base creates too much unnecessary template fuzz.
+// TODO: fix new algorithm implementation, and remove old, fully templated version.
 //
 #ifndef HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_ALGORITHM_H
 #define HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_ALGORITHM_H
@@ -590,6 +583,152 @@ protected:
   std::vector<bool> covered_cols_;
   Matrix<bool> star_matrix_;
   Matrix<bool> prime_matrix_;
+};
+
+class HungarianSolver
+{
+public:
+  /**
+   * Solves an assignment problem.
+   *
+   * @tparam NormalizationStrategy strategy for bringing the costs returned by the cost function into the setup required
+   *                               for the algorithm. Should be either MinimizeCosts or MaximizeCosts.
+   * @tparam CostFunction type of the cost_function parameter.
+   * @tparam AssignmentMap type of the assignment parameter.
+   * @param cost_function anything that takes a row and a column index and returns a cost.
+   *                      Used like Cost c = cost_function(row, col). In particular, the Matrix utility class, and the
+   *                      matrix classes of several libraries like Eigen or OpenCV provide this interface.
+   * @param num_rows number of rows (e.g., workers) in the assignment problem.
+   * @param num_cols number of columns (e.g. jobs) in the assignment problem.
+   * @param assignment_map anything that can be indexed and then assigned an index. Used like assignment[row] = col. In
+   *                       particular, std::vector and std::map provide this interface. Must accept a row index in the
+   *                       range 0 ... num_rows - 1. Only valid assignments are set; other entries are left unchanged
+   *                       (and should thus probably be initialized to something invalid, like SIZE_MAX).
+   * @return the cost of the optimal assignment, as a pair consisting of the number of invalid assignments, and the sum
+   *         of the costs of the valid assignments.
+   */
+  template<typename Cost, typename Size, typename CostFunction, typename AssignmentMap, typename CostComparator>
+  Cost solve(const CostFunction& cost_function, const Size num_rows, const Size num_cols, AssignmentMap& assignment_map,
+             const CostComparator cost_comparator = std::less<Cost>())
+  {
+    if (num_rows > Size(0) && num_cols > Size(0))
+    {
+      copyAndNormalizeCosts<Size, CostComparator, CostFunction>(cost_function, num_rows, num_cols, cost_comparator);
+      doSolve();
+    }
+
+    return fillAssignmentMap<Cost, Size, CostFunction, AssignmentMap>(
+      cost_function, num_rows, num_cols, AssignmentMapAdapter<Size, AssignmentMap>(assignment_map, num_rows, num_cols));
+  }
+
+  template<typename Cost, typename Size, typename CostFunction, typename AssignmentMap>
+  Cost solve(const CostFunction& cost_function, const Size num_rows, const Size num_cols, AssignmentMap& assignment_map)
+  {
+    return solve<Cost>(cost_function, num_rows, num_cols, assignment_map, std::less<Cost>());
+  }
+
+protected:
+  template<typename Size, typename CostFunction, typename CostComparator>
+  struct CostFunctionIndexComparator
+  {
+    CostFunctionIndexComparator(const CostFunction& cost_function, const CostComparator& cost_comparator)
+      : cost_function_(cost_function), cost_comparator_(cost_comparator)
+    {
+    }
+
+    bool operator()(const std::pair<Size, Size>& index_a, const std::pair<Size, Size>& index_b)
+    {
+      return cost_comparator_(cost_function_(index_a.first, index_a.second),
+                              cost_function_(index_b.first, index_b.second));
+    }
+
+    const CostFunction& cost_function_;
+    const CostComparator cost_comparator_;
+  };
+
+  template<typename Size, typename CostComparator, typename CostFunction>
+  void copyAndNormalizeCosts(const CostFunction& cost_function, const Size num_rows, const Size num_cols,
+                             const CostComparator cost_comparator)
+  {
+    // TODO: exchange num_rows and num_cols if num_rows > num_cols
+
+    typedef typename std::pair<Size, Size> CostFunctionIndex;
+
+    num_rows_ = static_cast<std::size_t>(num_rows);
+    num_cols_ = static_cast<std::size_t>(num_cols);
+    std::vector<CostFunctionIndex> indices_((num_rows_ * num_cols_));
+    std::size_t i = 0;
+    for (Size row(0); row < num_rows; ++row)
+    {
+      for (Size col(0); col < num_cols; ++col, ++i)
+      {
+        indices_[i].first = row;
+        indices_[i].second = col;
+      }
+    }
+
+    std::sort(indices_.begin(), indices_.end(),
+              CostFunctionIndexComparator<Size, CostFunction, CostComparator>(cost_function, cost_comparator));
+
+    cost_matrix_.resize(indices_.size());
+    std::size_t cost = 0;
+    for (i = 0; i < indices_.size(); ++i)
+    {
+      if (i > 0 && cost_comparator(cost_function(indices_[i - 1].first, indices_[i - 1].second),
+                                   cost_function(indices_[i].first, indices_[i].second)))
+      {
+        // Only increase cost if original cost also increased (= isn't equal); this should save some iterations later:
+        ++cost;
+      }
+      cost_matrix_[static_cast<std::size_t>(indices_[i].first * num_cols + indices_[i].second)] = cost;
+    }
+  }
+
+  template<typename Cost, typename Size, typename CostFunction, typename AssignmentMap>
+  Cost fillAssignmentMap(const CostFunction& cost_function, const Size num_rows, const Size num_cols,
+                         const AssignmentMapAdapter<Size, AssignmentMap>& assignment_map)
+  {
+    // Fill assignment vector and compute total cost of assignment:
+    Cost total_cost(0);
+    if (num_cols > Size(0))
+    {
+      std::size_t s_row = 0;
+      for (Size row(0); row < num_rows; ++row, ++s_row)
+      {
+        const std::size_t s_col(findInRow(star_matrix_, s_row));
+        if (s_col < num_cols_)
+        {
+          const Size col(s_col);
+          assignment_map.insert(row, col);
+          total_cost += cost_function(row, col);
+        }
+      }
+    }
+    return total_cost;
+  }
+
+  inline std::size_t getIndex(const std::size_t row, const std::size_t col) const
+  {
+    return row * num_cols_ + col;
+  }
+
+  std::size_t findInCol(const std::vector<bool>& matrix, const std::size_t col) const;
+  std::size_t findInRow(const std::vector<bool>& matrix, const std::size_t row) const;
+
+  void doSolve();
+  void coverStarredColumns();
+  bool areAllColumnsCovered();
+  void step3();
+  void step4(const std::size_t row, const std::size_t col);
+  void subtractSmallestUncoveredElement();  // aka step5
+
+  std::size_t num_rows_;
+  std::size_t num_cols_;
+  std::vector<std::size_t> cost_matrix_;
+  std::vector<bool> covered_rows_;
+  std::vector<bool> covered_cols_;
+  std::vector<bool> star_matrix_;
+  std::vector<bool> prime_matrix_;
 };
 
 template<typename Cost, typename CostNormalizationStrategy>
