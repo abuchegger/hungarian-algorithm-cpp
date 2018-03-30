@@ -8,10 +8,15 @@
 // Copyright (c) 2016, Cong Ma (mcximing)
 // Copyright (c) 2018, Alexander Buchegger (abuchegger)
 //
-// TODO: treat all invalid_value_s special (don't touch them)
-// TODO: maybe we can replace searches for zero with searches for smallest element? This would avoid numerical issues...
-// TODO: ... when working with floating-point numbers; it would also mean we can replace CostNormalizationStrategy...
-// TODO: ... with Comparator, for which we can use std::less and std::greater
+// TODO: split Hungarian and brute force algorithms in separate classes
+// TODO: ... again, common base creates too much unnecessary template fuzz.
+// TODO: change copyAndNormalizeCosts to convert costs to matrix of size_t. ...
+// TODO: ... This eliminates numeric issues with doubles, and allows us to ...
+// TODO: ... compile the actual solver implementation, as it's not templated ...
+// TODO: ... anymore. It should also allow us to replace
+// TODO: ... CostNormalizationStrategy with Comparator, for which we can use ...
+// TODO: ... std::less and std::greater, and get rid of special handling of ...
+// TODO: ... invalid_value_s.
 //
 #ifndef HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_ALGORITHM_H
 #define HUNGARIAN_ALGORITHM_CPP_HUNGARIAN_ALGORITHM_H
@@ -430,21 +435,9 @@ protected:
       }
     }
 
-    if (!areAllColumnsCovered())
+    while (!areAllColumnsCovered())
     {
-      /* algorithm not finished */
-      /* move to step 3 */
-      while (true)
-      {
-        while (!step3())
-        {
-        }
-        step5();
-        if (step3())
-        {
-          break;
-        }
-      }
+      step3();
     }
   }
 
@@ -471,12 +464,12 @@ protected:
       == covered_cols_.size();
   }
 
-  bool step3()
+  void step3()
   {
     bool zeros_found = true;
     while (zeros_found)
     {
-      // Find zeros in uncovered cells ("prime" zeros):
+      // Find zeros in uncovered cells (primed zeros):
       zeros_found = false;
       for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
       {
@@ -486,7 +479,7 @@ protected:
           {
             if (!covered_rows_[row] && cost_matrix_(row, col) <= epsilon_cost_)
             {
-              // Found a prime zero:
+              // Found a primed zero:
               prime_matrix_(row, col) = true;
 
               // Find starred zero in current row:
@@ -502,14 +495,15 @@ protected:
 
               // No starred zero found => move to step 4:
               step4(row, col);
-              coverStarredColumns();
-              return areAllColumnsCovered(); // Continue searching if not all columns are starred
+              return;
             }
           }
         }
       }
     }
-    return true;
+
+    // No more zeros found => generate more zeros by subtracting smallest remaining element:
+    subtractSmallestUncoveredElement();
   }
 
   void step4(const std::size_t row, const std::size_t col)
@@ -546,9 +540,10 @@ protected:
     // Delete all primes, uncover all rows:
     prime_matrix_.assign(false);
     covered_rows_.assign(covered_rows_.size(), false);
+    coverStarredColumns();
   }
 
-  void step5()
+  void subtractSmallestUncoveredElement()  // aka step5
   {
     // Find smallest uncovered element:
     Cost h = invalid_cost_;
@@ -560,30 +555,29 @@ protected:
         {
           if (!covered_cols_[col])
           {
-            h = std::min(h, cost_matrix_(row, col));
+            if (h == invalid_cost_)
+            {
+              h = cost_matrix_(row, col);
+            }
+            else
+            {
+              h = std::min(h, cost_matrix_(row, col));
+            }
           }
         }
       }
     }
 
-    // Add h to each covered row:
+    // Subtract h from each uncovered element, and add h to each doubly covered element:
     for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
     {
-      if (covered_rows_[row])
+      for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
       {
-        for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
+        if (covered_rows_[row] && covered_cols_[col])
         {
           cost_matrix_(row, col) += h;
         }
-      }
-    }
-
-    // Subtract h from each uncovered column:
-    for (std::size_t col = 0; col < cost_matrix_.numCols(); ++col)
-    {
-      if (!covered_cols_[col])
-      {
-        for (std::size_t row = 0; row < cost_matrix_.numRows(); ++row)
+        else if (!covered_rows_[row] && !covered_cols_[col])
         {
           cost_matrix_(row, col) -= h;
         }
