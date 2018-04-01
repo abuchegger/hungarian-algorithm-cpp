@@ -18,12 +18,9 @@ namespace hungarian_algorithm
 std::size_t HungarianSolver::findInCol(const std::vector<bool>& matrix, const std::size_t col) const
 {
   std::size_t row = 0;
-  for (std::size_t i = col; row < num_rows_; i += num_cols_, ++row)
+  for (std::size_t i = col; i < matrix.size() && !matrix[i]; i += num_cols_)
   {
-    if (matrix[i])
-    {
-      break;
-    }
+    ++row;
   }
   return row;
 }
@@ -85,8 +82,8 @@ void HungarianSolver::coverStarredColumns()
 
 bool HungarianSolver::areAllColumnsCovered()
 {
-  // Note: this requires that num_cols_ >= num_rows_:
-  return static_cast<std::size_t>(std::count(covered_cols_.begin(), covered_cols_.end(), true)) >= num_rows_;
+  return static_cast<std::size_t>(std::count(covered_cols_.begin(), covered_cols_.end(), true))
+    >= std::min(num_rows_, num_cols_);
 }
 
 void HungarianSolver::step3()
