@@ -1,0 +1,7 @@
+# CMake config file for hungarian-algorithm-cpp
+# It defines the following variables:
+#    @PROJECT_NAME@_INCLUDE_DIRS - include directories
+#    @PROJECT_NAME@_LIBRARIES    - link libraries
+
+set(@PROJECT_NAME@_INCLUDE_DIRS "@CMAKE_INSTALL_PREFIX@/include")
+set(@PROJECT_NAME@_LIBRARIES "@CMAKE_INSTALL_PREFIX@/lib/@CMAKE_SHARED_LIBRARY_PREFIX@@PROJECT_NAME@@CMAKE_SHARED_LIBRARY_SUFFIX@")
