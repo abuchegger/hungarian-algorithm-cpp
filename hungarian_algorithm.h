@@ -281,6 +281,8 @@ protected:
  * @param cost_function anything that takes a row and a column index and returns a cost.
  *                      Used like Cost c = cost_function(row, col). In particular, the Matrix utility class, and the
  *                      matrix classes of several libraries like Eigen or OpenCV provide this interface.
+ *                      The cost function should not contain inf or nan values as those values do not allow arithmetic
+ *                      operations such as addition, substract (inf - value = inf !).
  * @param num_rows number of rows (e.g., workers) in the assignment problem.
  * @param num_cols number of columns (e.g. jobs) in the assignment problem.
  * @param assignment_map anything that can be indexed and then assigned an index. Used like assignment[row] = col. In
